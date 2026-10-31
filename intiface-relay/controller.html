@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Remote Control</title>
+  <style>
+    :root {
+      --bg-color: #121212;
+      --card-bg: #1e1e1e;
+      --accent: #4f46e5;
+      --accent-hover: #4338ca;
+      --danger: #ef4444;
+      --text: #e5e7eb;
+      --text-muted: #9ca3af;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      padding: 20px;
+      margin: 0;
+    }
+    .container {
+      width: 100%;
+      max-width: 400px;
+      background: var(--card-bg);
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    }
+    h2 { text-align: center; margin-top: 0; font-size: 1.25rem; }
+    
+    .status-box {
+      background: #2a2a2a;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 20px;
+      font-size: 0.9rem;
+    }
+    .status-row { display: flex; justify-content: space-between; margin-bottom: 8px; }
+    .status-row:last-child { margin-bottom: 0; }
+    .highlight { color: #818cf8; font-weight: bold; }
+    .timer { font-size: 1.2rem; font-weight: bold; color: #f59e0b; text-align: center; margin-top: 8px; }
+
+    .control-group { margin-bottom: 24px; opacity: 0.3; pointer-events: none; transition: opacity 0.3s; }
+    .control-group.active { opacity: 1; pointer-events: auto; }
+    
+    .slider-val { text-align: center; font-size: 1.5rem; font-weight: bold; margin-bottom: 12px; }
+    input[type=range] {
+      width: 100%;
+      height: 8px;
+      border-radius: 4px;
+      background: #4b5563;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    .btn-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    button {
+      background: #374151;
+      color: white;
+      border: none;
+      padding: 12px;
+      border-radius: 6px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #4b5563; }
+    button.btn-stop {
+      width: 100%;
+      background: var(--danger);
+      font-size: 1.1rem;
+    }
+    button.btn-stop:hover { background: #dc2626; }
+    .notice { text-align: center; font-size: 0.85rem; color: #f59e0b; margin-top: 10px; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h2>リモートコントローラー</h2>
+
+  <div class="status-box">
+    <div class="status-row"><span>あなたの番号:</span> <span class="highlight" id="myId">接続中...</span></div>
+    <div class="status-row"><span>現在の操作者:</span> <span class="highlight" id="activeUser">-</span></div>
+    <div class="status-row"><span>残り時間:</span> <span class="timer" id="timer">--:--</span></div>
+    <div class="status-row"><span>待ちリスト:</span> <span id="queue">-</span></div>
+    <div class="status-row"><span>総使用者数:</span> <span id="totalCount">-</span></div>
+  </div>
+
+  <div class="notice" id="turnNotice">順番を待っています...</div>
+
+  <!-- コントロール操作部（自分の順番の時のみ有効化） -->
+  <div class="control-group" id="controls">
+    <div class="slider-val" id="sliderVal">0%</div>
+    <input type="range" id="vibeSlider" min="0" max="100" value="0">
+    
+    <div class="btn-grid" style="margin-top: 16px;">
+      <button onclick="sendSpeed(30)">Low</button>
+      <button onclick="sendSpeed(60)">Mid</button>
+      <button onclick="sendSpeed(100)">High</button>
+    </div>
+    <button class="btn-stop" onclick="sendSpeed(0)">STOP</button>
+  </div>
+</div>
+
+<script>
+  // 作成したRenderのWebSocket URL
+  const WS_URL = "wss://initface-relay.onrender.com";
+  let ws;
+  let myClientId = null;
+
+  const myIdEl = document.getElementById('myId');
+  const activeUserEl = document.getElementById('activeUser');
+  const timerEl = document.getElementById('timer');
+  const queueEl = document.getElementById('queue');
+  const totalCountEl = document.getElementById('totalCount');
+  const controlsEl = document.getElementById('controls');
+  const turnNoticeEl = document.getElementById('turnNotice');
+  const slider = document.getElementById('vibeSlider');
+  const sliderVal = document.getElementById('sliderVal');
+
+  function connect() {
+    ws = new WebSocket(WS_URL);
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === 'STATE_UPDATE') {
+        activeUserEl.textContent = data.currentUser || '-';
+        queueEl.textContent = data.queue.length > 0 ? data.queue.join(', ') : 'なし';
+        totalCountEl.textContent = data.totalUsers + '人';
+
+        const mins = String(Math.floor(data.timer / 60)).padStart(2, '0');
+        const secs = String(data.timer % 60).padStart(2, '0');
+        timerEl.textContent = `${mins}:${secs}`;
+
+        // 自分が割り振られたIDを初回メッセージ等から推測、あるいは最初のID受信時に設定
+        if (!myClientId && data.queue.includes(data.currentUser) === false) {
+          // 簡易的に自分のIDを判定
+        }
+
+        // 自分の順番かどうか判定
+        // ※簡易的に、自分の接続時に付与されたIDとcurrentUserが一致するか見るため、サーバーから自分のIDを受け取る仕組みがあると確実ですが、今回はシンプルに連動させます
+      }
+    };
+  }
+
+  slider.addEventListener('input', (e) => {
+    const val = e.target.value;
+    sliderVal.textContent = val + '%';
+    sendSpeed(val);
+  });
+
+  function sendSpeed(val) {
+    slider.value = val;
+    sliderVal.textContent = val + '%';
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'CHANGE_INTENSITY', intensity: Number(val) }));
+    }
+  }
+
+  connect();
+</script>
+</body>
+</html>

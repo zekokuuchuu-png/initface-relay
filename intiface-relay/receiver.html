@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Toy Receiver (Web Bluetooth)</title>
+  <style>
+    body { font-family: sans-serif; background: #121212; color: #fff; padding: 30px; display: flex; justify-content: center; }
+    .box { background: #1e1e1e; padding: 24px; border-radius: 12px; width: 100%; max-width: 400px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+    .status { margin: 12px 0; font-weight: bold; }
+    .ok { color: #10b981; }
+    .ng { color: #ef4444; }
+    button.btn-connect { background: #4f46e5; color: white; border: none; padding: 12px; width: 100%; font-weight: bold; border-radius: 6px; cursor: pointer; margin-bottom: 15px; }
+    button.btn-connect:hover { background: #4338ca; }
+    button.btn-stop { background: #ef4444; color: white; border: none; padding: 12px; width: 100%; font-weight: bold; border-radius: 6px; cursor: pointer; }
+  </style>
+</head>
+<body>
+
+<div class="box">
+  <h2>受動側パネル (Web版)</h2>
+  <div class="status">おもちゃの接続: <span id="toyStatus" class="ng">未接続</span></div>
+  <div class="status">Renderサーバー: <span id="renderStatus" class="ng">未接続</span></div>
+  
+  <button class="btn-connect" id="connectBtn" onclick="connectToy()">1. おもちゃとBluetooth接続する</button>
+  
+  <hr style="border-color: #333; margin: 20px 0;">
+  <div>現在の操作者: <span id="currentUser" style="color: #818cf8;">-</span></div>
+  <div>現在の強度: <span id="currentIntensity" style="font-size: 1.8rem; color: #f59e0b; font-weight: bold;">0%</span></div>
+  <br>
+  <button class="btn-stop" onclick="emergencyStop()">緊急停止 (STOP)</button>
+</div>
+
+<!-- Buttplug WASMライブラリの読み込み -->
+<script type="module">
+  import * as Buttplug from "https://cdn.jsdelivr.net/npm/buttplug@3.0.0/dist/bundle/buttplug.mjs";
+  import { ButtplugWasmClientConnector } from "https://cdn.jsdelivr.net/npm/buttplug-wasm@3.0.0/dist/esm/index.js";
+
+  let bpClient = new Buttplug.ButtplugClient("Netlify Toy Receiver");
+  let connectedDevice = null;
+  let renderWs = null;
+
+  const toyStatusEl = document.getElementById('toyStatus');
+  const renderStatusEl = document.getElementById('renderStatus');
+  const currentUserEl = document.getElementById('currentUser');
+  const currentIntensityEl = document.getElementById('currentIntensity');
+  const connectBtn = document.getElementById('connectBtn');
+
+  // 1. ブラウザのWeb Bluetoothでおもちゃに接続
+  window.connectToy = async function() {
+    try {
+      connectBtn.textContent = "ペアリング中...";
+      
+      // WASM内蔵サーバーとBluetoothコネクターの初期化
+      const connector = new ButtplugWasmClientConnector();
+      await bpClient.connect(connector);
+
+      bpClient.on("deviceadded", (device) => {
+        console.log(`デバイス検出: ${device.name}`);
+        connectedDevice = device;
+        toyStatusEl.textContent = `接続完了 (${device.name})`;
+        toyStatusEl.className = "ok";
+        connectBtn.style.display = "none"; // 接続できたらボタンを隠す
+      });
+
+      // スキャン開始（ブラウザのBluetooth機器選択ポップアップが開きます）
+      await bpClient.startScanning();
+      
+      if (!connectedDevice) {
+        // すぐ見つからない場合の案内
+        setTimeout(() => {
+          if (!connectedDevice) connectBtn.textContent = "おもちゃが見つかりません (再試行)";
+        }, 5000);
+      }
+    } catch (e) {
+      console.error(e);
+      toyStatusEl.textContent = "接続失敗またはキャンセルされました";
+      connectBtn.textContent = "1. おもちゃとBluetooth接続する";
+    }
+  }
+
+  // 2. Render サーバーへの接続
+  function connectRender() {
+    renderWs = new WebSocket("wss://initface-relay.onrender.com");
+
+    renderWs.onopen = () => {
+      renderStatusEl.textContent = "接続完了";
+      renderStatusEl.className = "ok";
+    };
+
+    renderWs.onmessage = async (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === 'STATE_UPDATE') {
+        currentUserEl.textContent = data.currentUser || 'なし';
+        currentIntensityEl.textContent = data.intensity + '%';
+
+        // おもちゃへ振動命令を送信 (0.0 〜 1.0 に変換)
+        if (connectedDevice) {
+          try {
+            await connectedDevice.vibrate(data.intensity / 100);
+          } catch (err) {
+            console.error("振動コマンド送信エラー", err);
+          }
+        }
+      }
+    };
+
+    renderWs.onclose = () => {
+      renderStatusEl.textContent = "切断されました (再接続中...)";
+      renderStatusEl.className = "ng";
+      setTimeout(connectRender, 3000);
+    };
+  }
+
+  // 緊急停止
+  window.emergencyStop = async function() {
+    if (connectedDevice) {
+      await connectedDevice.vibrate(0);
+    }
+    currentIntensityEl.textContent = "0%";
+    if (renderWs && renderWs.readyState === WebSocket.OPEN) {
+      // サーバー側にも0を伝える等の処理を入れられます
+    }
+  }
+
+  // ページを開いたら自動でRenderサーバーには繋ぎにいく
+  connectRender();
+</script>
+</body>
+</html>
